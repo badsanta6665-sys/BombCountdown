@@ -1,3 +1,4 @@
+
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes;
@@ -5,184 +6,257 @@ using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.Utils;
 using System.Text.Json.Serialization;
 
-public class BombCountdownConfig : BasePluginConfig
+public class RoundEndSoundConfig : BasePluginConfig
 {
     [JsonPropertyName("Enabled")]
     public bool Enabled { get; set; } = true;
     
-    [JsonPropertyName("StartFromSecond")]
-    public int StartFromSecond { get; set; } = 40;
+    [JsonPropertyName("Sounds")]
+    public SoundConfig Sounds { get; set; } = new();
     
-    [JsonPropertyName("AnnounceSeconds")]
-    public List<int> AnnounceSeconds { get; set; } = new();
+    [JsonPropertyName("Volume")]
+    public float Volume { get; set; } = 1.0f;
     
-    [JsonPropertyName("SoundPath")]
-    public string SoundPath { get; set; } = "sounds/bombcountdown";
+    [JsonPropertyName("DelayBeforeSound")]
+    public float DelayBeforeSound { get; set; } = 1.0f;
     
-    [JsonPropertyName("ShowTextCountdown")]
-    public bool ShowTextCountdown { get; set; } = true;
+    [JsonPropertyName("RandomSounds")]
+    public bool RandomSounds { get; set; } = false;
     
-    [JsonPropertyName("PlaySoundCountdown")]
-    public bool PlaySoundCountdown { get; set; } = true;
-    
-    [JsonPropertyName("TextColor")]
-    public string TextColor { get; set; } = "{RED}";
+    [JsonPropertyName("PlayForWinningTeamOnly")]
+    public bool PlayForWinningTeamOnly { get; set; } = false;
     
     [JsonPropertyName("Debug")]
     public bool Debug { get; set; } = false;
 }
 
-[MinimumApiVersion(80)]
-public class BombCountdownPlugin : BasePlugin, IPluginConfig<BombCountdownConfig>
+public class SoundConfig
 {
-    public override string ModuleName => "Bomb Countdown";
-    public override string ModuleVersion => "1.2.0";
-    public override string ModuleAuthor => "Assistant";
-    public override string ModuleDescription => "Bomb countdown with sound from 40 seconds to 1 second";
+    [JsonPropertyName("CTWin")]
+    public string CTWin { get; set; } = "sounds/roundend/ct_win.vsnd_c";
     
-    public BombCountdownConfig Config { get; set; } = new();
+    [JsonPropertyName("TWin")]
+    public string TWin { get; set; } = "sounds/roundend/t_win.vsnd_c";
     
-    private Timer? _countdownTimer;
-    private int _currentSecond;
-    private bool _isBombPlanted = false;
-    private bool _isCountdownActive = false;
+    [JsonPropertyName("Draw")]
+    public string Draw { get; set; } = "sounds/roundend/draw.vsnd_c";
+    
+    [JsonPropertyName("RoundEnd")]
+    public string RoundEnd { get; set; } = "sounds/roundend/round_end.vsnd_c";
+    
+    [JsonPropertyName("CTWinSounds")]
+    public List<string> CTWinSounds { get; set; } = new();
+    
+    [JsonPropertyName("TWinSounds")]
+    public List<string> TWinSounds { get; set; } = new();
+    
+    [JsonPropertyName("RoundEndSounds")]
+    public List<string> RoundEndSounds { get; set; } = new();
+}
 
-    public void OnConfigParsed(BombCountdownConfig config)
+[MinimumApiVersion(80)]
+public class RoundEndSoundPlugin : BasePlugin, IPluginConfig<RoundEndSoundConfig>
+{
+    public override string ModuleName => "Round End Sound";
+    public override string ModuleVersion => "1.0.0";
+    public override string ModuleAuthor => "Assistant";
+    public override string ModuleDescription => "Plays vsnd_c sounds at round end in CS2";
+    
+    public RoundEndSoundConfig Config { get; set; } = new();
+    private readonly Random _random = new();
+
+    public void OnConfigParsed(RoundEndSoundConfig config)
     {
-        if (config.AnnounceSeconds.Count == 0)
-        {
-            config.AnnounceSeconds = new List<int> { 40, 35, 30, 25, 20, 15, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1 };
-        }
-        
         Config = config;
         
         if (Config.Debug)
         {
-            Console.WriteLine("[BombCountdown] Configuration loaded successfully!");
+            Console.WriteLine("[RoundEndSound] Configuration loaded successfully!");
         }
     }
 
     public override void Load(bool hotReload)
     {
-        RegisterEventHandler<EventBombPlanted>(OnBombPlanted);
-        RegisterEventHandler<EventBombExploded>(OnBombExploded);
-        RegisterEventHandler<EventBombDefused>(OnBombDefused);
         RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
         RegisterEventHandler<EventRoundStart>(OnRoundStart);
         
-        Console.WriteLine("[BombCountdown] Plugin loaded successfully!");
+        Console.WriteLine("[RoundEndSound] Plugin loaded successfully!");
     }
 
-    private HookResult OnBombPlanted(EventBombPlanted eventObj, GameEventInfo info)
+    private HookResult OnRoundEnd(EventRoundEnd eventObj, GameEventInfo info)
     {
         if (!Config.Enabled) return HookResult.Continue;
+
+        try
+        {
+            var winner = (CsTeam)eventObj.Winner;
+            var reason = eventObj.Reason;
+            
+            if (Config.Debug)
+            {
+                Console.WriteLine($"[RoundEndSound] Round ended. Winner: {winner}, Reason: {reason}");
+            }
+            
+            // Запускаем звуки с задержкой
+            AddTimer(Config.DelayBeforeSound, () => PlayRoundEndSounds(winner));
+        }
+        catch (Exception ex)
+        {
+            if (Config.Debug)
+            {
+                Console.WriteLine($"[RoundEndSound] Error: {ex.Message}");
+            }
+        }
         
-        StartCountdown();
         return HookResult.Continue;
     }
 
-    private void StartCountdown()
+    private void PlayRoundEndSounds(CsTeam winner)
     {
-        _isBombPlanted = true;
-        _isCountdownActive = true;
-        _currentSecond = Config.StartFromSecond;
+        // Проигрываем звук конца раунда
+        PlayRoundEndSound();
         
-        _countdownTimer?.Kill();
-        _countdownTimer = AddTimer(1.0f, OnCountdownTick, TimerFlags.REPEAT);
+        // Проигрываем звук победителя с небольшой задержкой
+        AddTimer(0.5f, () => PlayTeamWinSound(winner));
     }
 
-    private void OnCountdownTick()
+    private void PlayRoundEndSound()
     {
-        if (!_isBombPlanted || !_isCountdownActive)
-        {
-            _countdownTimer?.Kill();
-            return;
-        }
+        string soundPath = GetRoundEndSound();
         
-        if (Config.AnnounceSeconds.Contains(_currentSecond))
+        if (Config.PlayForWinningTeamOnly)
         {
-            AnnounceCountdown(_currentSecond);
-        }
-        
-        _currentSecond--;
-        
-        if (_currentSecond <= 0)
-        {
-            _countdownTimer?.Kill();
-            _isCountdownActive = false;
-        }
-    }
-
-    private void AnnounceCountdown(int seconds)
-    {
-        if (Config.ShowTextCountdown)
-        {
-            var message = $"{Config.TextColor}⚡ БОМБА: {seconds} секунд{GetRussianEnding(seconds)}!";
-            Server.PrintToChatAll(message);
-        }
-        
-        if (Config.PlaySoundCountdown)
-        {
-            var soundPath = $"{Config.SoundPath}/{seconds}.vsnd";
+            // Проигрываем только определенным игрокам
             PlaySoundToAll(soundPath);
         }
+        else
+        {
+            // Проигрываем всем
+            PlaySoundToAll(soundPath);
+        }
+        
+        if (Config.Debug)
+        {
+            Console.WriteLine($"[RoundEndSound] Playing round end sound: {soundPath}");
+        }
+    }
+
+    private void PlayTeamWinSound(CsTeam winner)
+    {
+        string soundPath = GetTeamWinSound(winner);
+        
+        if (Config.PlayForWinningTeamOnly && winner != CsTeam.None)
+        {
+            // Проигрываем только победившей команде
+            PlaySoundToTeam(winner, soundPath);
+        }
+        else
+        {
+            // Проигрываем всем
+            PlaySoundToAll(soundPath);
+        }
+        
+        if (Config.Debug)
+        {
+            Console.WriteLine($"[RoundEndSound] Playing team sound: {soundPath} for {winner}");
+        }
+    }
+
+    private string GetRoundEndSound()
+    {
+        if (Config.RandomSounds && Config.Sounds.RoundEndSounds.Count > 0)
+        {
+            return Config.Sounds.RoundEndSounds[_random.Next(Config.Sounds.RoundEndSounds.Count)];
+        }
+        return Config.Sounds.RoundEnd;
+    }
+
+    private string GetTeamWinSound(CsTeam winner)
+    {
+        return winner switch
+        {
+            CsTeam.CounterTerrorist => GetCTWinSound(),
+            CsTeam.Terrorist => GetTWinSound(),
+            _ => Config.Sounds.Draw
+        };
+    }
+
+    private string GetCTWinSound()
+    {
+        if (Config.RandomSounds && Config.Sounds.CTWinSounds.Count > 0)
+        {
+            return Config.Sounds.CTWinSounds[_random.Next(Config.Sounds.CTWinSounds.Count)];
+        }
+        return Config.Sounds.CTWin;
+    }
+
+    private string GetTWinSound()
+    {
+        if (Config.RandomSounds && Config.Sounds.TWinSounds.Count > 0)
+        {
+            return Config.Sounds.TWinSounds[_random.Next(Config.Sounds.TWinSounds.Count)];
+        }
+        return Config.Sounds.TWin;
     }
 
     private void PlaySoundToAll(string soundPath)
     {
+        if (string.IsNullOrEmpty(soundPath)) return;
+        
         var players = Utilities.GetPlayers();
         foreach (var player in players)
         {
             if (player?.IsValid == true && !player.IsBot)
             {
-                player.ExecuteClientCommand($"play {soundPath}");
+                PlaySoundToPlayer(player, soundPath);
             }
         }
     }
 
-    private string GetRussianEnding(int number)
+    private void PlaySoundToTeam(CsTeam team, string soundPath)
     {
-        if (number == 1) return "а";
-        if (number >= 2 && number <= 4) return "ы";
-        return "";
+        if (string.IsNullOrEmpty(soundPath)) return;
+        
+        var players = Utilities.GetPlayers();
+        foreach (var player in players)
+        {
+            if (player?.IsValid == true && !player.IsBot && player.Team == team)
+            {
+                PlaySoundToPlayer(player, soundPath);
+            }
+        }
     }
 
-    private void StopCountdown()
+    private void PlaySoundToPlayer(CCSPlayerController player, string soundPath)
     {
-        _isBombPlanted = false;
-        _isCountdownActive = false;
-        _countdownTimer?.Kill();
-        _countdownTimer = null;
-    }
-
-    private HookResult OnBombExploded(EventBombExploded eventObj, GameEventInfo info)
-    {
-        StopCountdown();
-        return HookResult.Continue;
-    }
-
-    private HookResult OnBombDefused(EventBombDefused eventObj, GameEventInfo info)
-    {
-        StopCountdown();
-        return HookResult.Continue;
-    }
-
-    private HookResult OnRoundEnd(EventRoundEnd eventObj, GameEventInfo info)
-    {
-        StopCountdown();
-        return HookResult.Continue;
+        if (string.IsNullOrEmpty(soundPath) || player?.IsValid != true) return;
+        
+        try
+        {
+            // Правильное воспроизведение vsnd_c файлов в CS2
+            player.ExecuteClientCommand($"play {soundPath}");
+            
+            // Альтернативный способ через эмиттер звуков
+            // player.EmitSound(soundPath);
+        }
+        catch (Exception ex)
+        {
+            if (Config.Debug)
+            {
+                Console.WriteLine($"[RoundEndSound] Error playing sound to {player.PlayerName}: {ex.Message}");
+            }
+        }
     }
 
     private HookResult OnRoundStart(EventRoundStart eventObj, GameEventInfo info)
     {
-        StopCountdown();
-        _isBombPlanted = false;
+        // Очистка или подготовка к новому раунду
         return HookResult.Continue;
     }
 
     public override void Unload(bool hotReload)
     {
-        StopCountdown();
+        Console.WriteLine("[RoundEndSound] Plugin unloaded");
         base.Unload(hotReload);
     }
 }
